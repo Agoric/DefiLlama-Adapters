@@ -62,55 +62,173 @@ async function fetchISTDataWithUSD() {
   return balances;
 }
 
-module.exports = {
-  timetravel: false,
-  methodology: "Sum of all the tokens in the IST supply on Agoric.",
-  agoric: {
-    tvl: fetchISTData, // use fetchISTData for now
-    // tvl: fetchISTDataWithUSD, // uncomment to use usd calculation
-  },
-};
-
-// TODO: discuss which approach to take, and verify calculation results
 
 /*
-
-CALCULATION RESULTS
-
-
-
-1) Result for fetchISTData:
-
-node test.js projects/inter-protocol/index.js
---- agoric ---
-BLD                       136.79 k
-Total: 136.79 k 
-
---- tvl ---
-BLD                       136.79 k
-Total: 136.79 k 
-
------- TVL ------
-agoric                    136.79 k
-
-total                    136.79 k
-
-
-
-
-2) Result for fetchISTDataWithUSD:
-
-node test.js projects/inter-protocol/index.js
---- agoric ---
-BLD                       13.93 k
-Total: 13.93 k 
-
---- tvl ---
-BLD                       13.93 k
-Total: 13.93 k 
-
------- TVL ------
-agoric                    13.93 k
-
-total                    13.93 k
+@name fetchVstorageData
+@description fetches data from vstorage using RPC
+@param path - the vstorage path to query
 */
+async function fetchVstorageData(path) {
+  const url = "http://localhost:26657/";
+  const payload = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "abci_query",
+    params: {
+      path: path,
+    },
+  };
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (response.data.result.response.value) {
+      const decodedValue = Buffer.from(response.data.result.response.value, 'base64').toString('utf8');
+      return JSON.parse(decodedValue);
+    } else {
+      throw new Error('No value found in response');
+    }
+  } catch (error) {
+    // console.error("Error fetching vstorage data:", error);
+    throw error;
+  }
+}
+
+
+/*
+@name fetchReserveData
+@description fetches reserve data from agoric storage using RPC utils
+*/
+async function fetchReserveData() {
+  const reserveData = await fetchVstorageData('/custom/vstorage/data/published.reserve.metrics');
+  console.log("reserveData");
+  console.log(reserveData);
+  const firstParsedReserveData = JSON.parse(reserveData.value);
+  console.log("firstParsedReserveData");
+  console.log(firstParsedReserveData);
+  const secondParsedReserveData = JSON.parse(firstParsedReserveData.values[0]);
+  console.log("secondParsedReserveData");
+  console.log(secondParsedReserveData);
+  const thirdParsedReserveData = JSON.parse(secondParsedReserveData.body.substring(1));
+  console.log(4);
+  console.log(thirdParsedReserveData);
+  console.log(thirdParsedReserveData.allocations);
+  const reserve = parseFloat(thirdParsedReserveData.allocations.Fee.value.replace('+', ''));
+  console.log("RESERVE")
+  console.log(reserve)
+  return reserve;
+}
+
+/*
+@name fetchPSMData
+@description fetches PSM data from agoric storage using RPC utils for all asset types
+*/
+async function fetchPSMData() {
+  const assetTypes = ['DAI_axl', 'DAI_grv', 'USDC_axl', 'USDC_grv', 'USDT_axl', 'USDT_grv'];
+  let totalPsm = 0;
+
+  for (const assetType of assetTypes) {
+    console.log("assetType", assetType)
+    const psmData = await fetchVstorageData(`/custom/vstorage/data/published.psm.IST.${assetType}.metrics`);
+    console.log("fetchPSMData iteration");
+    console.log(psmData);
+    const firstParsedPsmData = JSON.parse(psmData.value);
+    console.log("firstParsedPsmData");
+    console.log(firstParsedPsmData);
+    const secondParsedPsmData = JSON.parse(firstParsedPsmData.values[0]);
+    console.log("secondParsedPsmData");
+    console.log(secondParsedPsmData);
+    const cleanedBody = secondParsedPsmData.body.substring(1); 
+    const thirdParsedPsmData = JSON.parse(cleanedBody);
+    console.log("thirdParsedPsmData");
+    console.log(thirdParsedPsmData);
+    const psm = parseFloat(thirdParsedPsmData.anchorPoolBalance.value.replace('+', ''));
+    console.log("PSM")
+    console.log(psm)
+    totalPsm += psm;
+  }
+
+  return totalPsm;
+}
+
+
+/*
+@name fetchVaultData
+@description fetches vault data from vstorage using RPC utils
+*/
+async function fetchVaultData() {
+  const managerIds = [0, 1]; // list of manager IDs to check, ideally we can fetch these ahead of time too so we can iterate deteministically without hardcoding....
+  let totalLocked = 0;
+
+  for (const managerId of managerIds) {
+    console.log("Fetching vaults for ManagerID: ", managerId)
+    let vaultId = 0;
+    while (true) { // TODO: this is naive approach for testing, ideally we should fetch the amount of vaults concretely, and iterate...
+      try {
+        const vaultData = await fetchVstorageData(`/custom/vstorage/data/published.vaultFactory.managers.manager${managerId}.vaults.vault${vaultId}`);
+        const firstParsed = JSON.parse(vaultData.value);
+        const secondParsed = JSON.parse(firstParsed.values[0]);
+        const cleanedBody = secondParsed.body.substring(1); // remove the first character "#"
+        const thirdParsed = JSON.parse(cleanedBody);
+        console.log("fetch vault: ", vaultId, " with manager id: ", managerId)
+        console.log(thirdParsed)
+        const locked = parseFloat(thirdParsed.locked.value.replace('+', ''));
+        totalLocked += locked;
+        vaultId += 1;
+      } catch (error) {
+        if (error.message.includes('No value found in response')) {
+          console.log(`No more vaults found for manager ${managerId}, vaultId ${vaultId}`);
+          break;
+        } else {
+          console.error("Error fetching vault data:", error);
+          break;
+        }
+      }
+    }
+  }
+
+  return totalLocked;
+}
+
+/*
+@name fetchTotalTVL
+@description calculates total TVL including reserves, PSM, vaultsl, (and IST supply?)
+*/
+async function fetchTotalTVL() {
+  const istData = await fetchISTData();
+  const reserveData = await fetchReserveData();
+  const psmData = await fetchPSMData();
+  const vaultData = await fetchVaultData();
+
+
+  console.log("IST Data:", istData);
+  console.log("Reserve Data:", reserveData);
+  console.log("PSM Data:", psmData);
+  console.log("Vault Data:", vaultData);
+
+
+  const totalIST = parseFloat(Object.values(istData)[0]);
+  // const totalTVL = totalIST + reserveData + psmData;
+  // const totalTVL = reserveData + psmData; // remove total supply from calc?
+  const totalTVL = totalIST + reserveData + psmData + vaultData; //try vaut data
+
+  const balances = {};
+  sdk.util.sumSingleBalance(balances, agoric.coinGeckoId, totalTVL);
+
+  return balances;
+}
+
+
+module.exports = {
+  timetravel: false,
+  methodology: "Sum of IST TVL on Agoric",
+  ist: {
+    // tvl: fetchISTData, // use fetchISTData for now
+    // tvl: fetchISTDataWithUSD, // uncomment to use usd calculation
+    tvl: fetchTotalTVL, //debug: total tvl
+  },
+};

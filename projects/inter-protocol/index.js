@@ -257,7 +257,8 @@ async function fetchTotalTVL() {
   const totalIST = parseFloat(Object.values(istData)[0]);
   // const totalTVL = totalIST + reserveData + psmData;
   // const totalTVL = reserveData + psmData; // remove total supply from calc?
-  const totalTVL = totalIST + reserveData + psmData + vaultData; //TODO: try vaut data
+  // const totalTVL = totalIST + reserveData + psmData + vaultData; //TODO: try vaut data
+  const totalTVL =  reserveData + psmData + vaultData; 
 
   const balances = {};
   sdk.util.sumSingleBalance(balances, agoric.coinGeckoId, totalTVL);

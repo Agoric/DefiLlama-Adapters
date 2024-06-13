@@ -15,6 +15,15 @@ node test.js projects/inter-protocol/index.js
 - fetchVaultData: fetches vault data from vstorage and calculates the total locked value in usd. collects unique collateral types, fetches their prices from coingecko, and calculates the total usd value of the locked collateral.
 - fetchTotalTVL: calculates total tvl (total value locked) including reserves, psm, vaults, and IST supply. sums up the values fetched by the other functions to get the total tvl.
 
+### logic
+
+for ```fetchISTData```, we are pulling the total IST supply from the cosmos directory. the endpoint we’re hitting is https://rest.cosmos.directory/agoric/cosmos/bank/v1beta1/supply/by_denom?denom=uist. we process this to get the amount of IST in circulation. (May not need this as it might be redundant..?)
+
+for ```fetchReserveData```, this one’s for grabbing reserve metrics. we hit the path /custom/vstorage/data/published.reserve.metrics. the data we get back includes some marshaled bigints. we parse this to get the fee allocation value.
+
+for ```fetchPSMData```, we first get the different asset types from /custom/vstorage/children/published.psm.IST. then, for each asset type, we fetch its metrics from /custom/vstorage/data/published.psm.IST.${assetType}.metrics. we parse these to sum up the anchor pool balances.
+
+for ```fetchVaultData```, we start by fetching the vault managers from /custom/vstorage/children/published.vaultFactory.managers. then, for each manager, we get the vault data from 
 
 ## Updated Example Output
 Taking into account reserve, vaults, and psm

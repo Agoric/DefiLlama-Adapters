@@ -49,7 +49,7 @@ async function fetchISTDataWithUSD() {
   const amount = assetBalance / coinDecimals;
 
   // fetch ist price in usd from coingecko
-  const priceUrl = "https://api.coingecko.com/api/v3/simple/price?ids=agoric&vs_currencies=usd";
+  const priceUrl = "https://api.coingecko.com/api/v3/simple/price?ids=inter-stable-token&vs_currencies=usd";
   const priceResponse = await axios.get(priceUrl);
   const price = priceResponse.data.agoric.usd;
 
@@ -65,7 +65,7 @@ async function fetchISTDataWithUSD() {
 
 /*
 @name fetchVstorageData
-@description fetches data from vstorage using RPC
+@description fetches data from vstorage
 @param path - the vstorage path to query
 */
 async function fetchVstorageData(path) {
@@ -101,98 +101,141 @@ async function fetchVstorageData(path) {
 
 /*
 @name fetchReserveData
-@description fetches reserve data from agoric storage using RPC utils
+@description fetches reserve data from vstorage 
 */
 async function fetchReserveData() {
-  const reserveData = await fetchVstorageData('/custom/vstorage/data/published.reserve.metrics');
-  console.log("reserveData");
-  console.log(reserveData);
-  const firstParsedReserveData = JSON.parse(reserveData.value);
-  console.log("firstParsedReserveData");
-  console.log(firstParsedReserveData);
-  const secondParsedReserveData = JSON.parse(firstParsedReserveData.values[0]);
-  console.log("secondParsedReserveData");
-  console.log(secondParsedReserveData);
-  const thirdParsedReserveData = JSON.parse(secondParsedReserveData.body.substring(1));
-  console.log(4);
-  console.log(thirdParsedReserveData);
-  console.log(thirdParsedReserveData.allocations);
-  const reserve = parseFloat(thirdParsedReserveData.allocations.Fee.value.replace('+', ''));
-  console.log("RESERVE")
-  console.log(reserve)
+  const reserveData = await fetchVstorageData('/custom/vstorage/data/published.reserve.metrics'); // "+"" means is marshalled bigint
+  const parsedValue = JSON.parse(reserveData.value);
+  const parsedMetrics = JSON.parse(parsedValue.values[0]);
+  const cleanedMetricsBody = JSON.parse(parsedMetrics.body.substring(1));
+  // TODO: look at marshaler, fromCapData UPDATE: cannot add dep to repo 
+  const reserve = parseFloat(cleanedMetricsBody.allocations.Fee.value.replace('+', ''));
+  console.log("RESERVE");
+  console.log(reserve);
   return reserve;
 }
 
 /*
 @name fetchPSMData
-@description fetches PSM data from agoric storage using RPC utils for all asset types
+@description fetches PSM data from vstorage for all asset types
 */
-async function fetchPSMData() {
-  const assetTypes = ['DAI_axl', 'DAI_grv', 'USDC_axl', 'USDC_grv', 'USDT_axl', 'USDT_grv'];
+const fetchPSMData = async () => {
+  const psmTypes = await fetchVstorageData('/custom/vstorage/children/published.psm.IST');
   let totalPsm = 0;
 
-  for (const assetType of assetTypes) {
-    console.log("assetType", assetType)
+  await Promise.all(psmTypes.children.map(async (assetType) => {
+    console.log("assetType", assetType);
     const psmData = await fetchVstorageData(`/custom/vstorage/data/published.psm.IST.${assetType}.metrics`);
     console.log("fetchPSMData iteration");
     console.log(psmData);
-    const firstParsedPsmData = JSON.parse(psmData.value);
-    console.log("firstParsedPsmData");
-    console.log(firstParsedPsmData);
-    const secondParsedPsmData = JSON.parse(firstParsedPsmData.values[0]);
-    console.log("secondParsedPsmData");
-    console.log(secondParsedPsmData);
-    const cleanedBody = secondParsedPsmData.body.substring(1); 
-    const thirdParsedPsmData = JSON.parse(cleanedBody);
-    console.log("thirdParsedPsmData");
-    console.log(thirdParsedPsmData);
-    const psm = parseFloat(thirdParsedPsmData.anchorPoolBalance.value.replace('+', ''));
-    console.log("PSM")
-    console.log(psm)
-    totalPsm += psm;
-  }
+    const parsedPsmValue = JSON.parse(psmData.value);
+    console.log("parsedPsmValue");
+    console.log(parsedPsmValue);
+
+    parsedPsmValue.values.forEach((value) => {
+      const parsedMetrics = JSON.parse(value);
+      console.log("parsedMetrics");
+      console.log(parsedMetrics);
+      const cleanedMetricsBody = parsedMetrics.body.substring(1);
+      const cleanedParsedMetrics = JSON.parse(cleanedMetricsBody);
+      console.log("cleanedParsedMetrics");
+      console.log(cleanedParsedMetrics);
+      const psm = parseFloat(cleanedParsedMetrics.anchorPoolBalance.value.replace('+', ''));
+      console.log("PSM")
+      console.log(psm)
+      totalPsm += psm;
+    });
+  }));
 
   return totalPsm;
-}
+};
+
 
 
 /*
 @name fetchVaultData
-@description fetches vault data from vstorage using RPC utils
+@description fetches vault data from vstorage and calculates the total locked value in USD
 */
 async function fetchVaultData() {
-  const managerIds = [0, 1]; // list of manager IDs to check, ideally we can fetch these ahead of time too so we can iterate deteministically without hardcoding....
-  let totalLocked = 0;
+  const managerData = await fetchVstorageData('/custom/vstorage/children/published.vaultFactory.managers');
+  let totalLockedUSD = 0;
+  const collateralSet = new Set(); // no dups
 
-  for (const managerId of managerIds) {
-    console.log("Fetching vaults for ManagerID: ", managerId)
-    let vaultId = 0;
-    while (true) { // TODO: this is naive approach for testing, ideally we should fetch the amount of vaults concretely, and iterate...
+  // collect unique collateral types...
+  await Promise.all(managerData.children.map(async (managerId) => {
+    const vaultDataList = await fetchVstorageData(`/custom/vstorage/children/published.vaultFactory.managers.${managerId}.vaults`);
+    await Promise.all(vaultDataList.children.map(async (vaultId) => {
       try {
-        const vaultData = await fetchVstorageData(`/custom/vstorage/data/published.vaultFactory.managers.manager${managerId}.vaults.vault${vaultId}`);
-        const firstParsed = JSON.parse(vaultData.value);
-        const secondParsed = JSON.parse(firstParsed.values[0]);
-        const cleanedBody = secondParsed.body.substring(1); // remove the first character "#"
-        const thirdParsed = JSON.parse(cleanedBody);
-        console.log("fetch vault: ", vaultId, " with manager id: ", managerId)
-        console.log(thirdParsed)
-        const locked = parseFloat(thirdParsed.locked.value.replace('+', ''));
-        totalLocked += locked;
-        vaultId += 1;
+        const vaultData = await fetchVstorageData(`/custom/vstorage/data/published.vaultFactory.managers.${managerId}.vaults.${vaultId}`);
+        const parsedVaultData = JSON.parse(vaultData.value);
+        parsedVaultData.values.forEach((value) => {
+          const vaultMetrics = JSON.parse(value);
+          const cleanedMetricsBody = vaultMetrics.body.substring(1);
+          const cleanedParsedMetrics = JSON.parse(cleanedMetricsBody);
+          const lockedBrand = cleanedParsedMetrics.locked.brand.split(" ")[1].toLowerCase();
+          collateralSet.add(lockedBrand);
+        });
       } catch (error) {
-        if (error.message.includes('No value found in response')) {
-          console.log(`No more vaults found for manager ${managerId}, vaultId ${vaultId}`);
-          break;
-        } else {
-          console.error("Error fetching vault data:", error);
-          break;
-        }
+        console.error("Error fetching vault data:", error);
       }
-    }
-  }
+    }));
+  }));
 
-  return totalLocked;
+  // fetch prices for unique collateral types...
+  const collateralPrices = {};
+  await Promise.all([...collateralSet].map(async (collateral) => {
+    console.log("coll: ", collateral);
+    const collateralToFetch = (collateral === "atom") ? "cosmos" : collateral;
+    const priceUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${collateralToFetch}&vs_currencies=usd`;
+    console.log("priceUrl:", priceUrl);
+    try {
+      const priceResponse = await axios.get(priceUrl);
+      if (priceResponse.data[collateralToFetch]) {
+        console.log("Got Price: ", priceResponse);
+        collateralPrices[collateral] = priceResponse.data[collateralToFetch].usd;
+      } else {
+        console.error(`Price data not found for: ${collateral}`);
+      }
+    } catch (error) {
+      console.error(`Error fetching price for ${collateral}:`, error);
+    }
+  }));
+
+  // calculate total locked value in USD...
+  await Promise.all(managerData.children.map(async (managerId) => {
+    const vaultDataList = await fetchVstorageData(`/custom/vstorage/children/published.vaultFactory.managers.${managerId}.vaults`);
+    console.log("vaultDataList");
+    console.log(vaultDataList);
+    await Promise.all(vaultDataList.children.map(async (vaultId) => {
+      try {
+        const vaultData = await fetchVstorageData(`/custom/vstorage/data/published.vaultFactory.managers.${managerId}.vaults.${vaultId}`);
+        const parsedVaultData = JSON.parse(vaultData.value);
+        parsedVaultData.values.forEach((value) => {
+          const vaultMetrics = JSON.parse(value);
+          const cleanedMetricsBody = vaultMetrics.body.substring(1);
+          const cleanedParsedMetrics = JSON.parse(cleanedMetricsBody);
+          const locked = parseFloat(cleanedParsedMetrics.locked.value.replace('+', ''));
+          const lockedBrand = cleanedParsedMetrics.locked.brand.split(" ")[1].toLowerCase();
+          console.log("lockedBrand: ", lockedBrand);
+          console.log(collateralPrices);
+          const price = collateralPrices[lockedBrand];
+          console.log("coll price: ", price);
+          if (price) {
+            const lockedUSD = locked * price / getCoinDecimals(lockedBrand);
+            totalLockedUSD += lockedUSD;
+          } else {
+            console.error(`Price not available for collateral: ${lockedBrand}`);
+          }
+        });
+      } catch (error) {
+        console.error("Error fetching vault data:", error);
+      }
+    }));
+  }));
+
+  return totalLockedUSD;
 }
+
 
 /*
 @name fetchTotalTVL
@@ -205,7 +248,7 @@ async function fetchTotalTVL() {
   const vaultData = await fetchVaultData();
 
 
-  console.log("IST Data:", istData);
+  console.log("IST Data:", istData); // do we need the supply? would it be redundant?
   console.log("Reserve Data:", reserveData);
   console.log("PSM Data:", psmData);
   console.log("Vault Data:", vaultData);
@@ -214,7 +257,7 @@ async function fetchTotalTVL() {
   const totalIST = parseFloat(Object.values(istData)[0]);
   // const totalTVL = totalIST + reserveData + psmData;
   // const totalTVL = reserveData + psmData; // remove total supply from calc?
-  const totalTVL = totalIST + reserveData + psmData + vaultData; //try vaut data
+  const totalTVL = totalIST + reserveData + psmData + vaultData; //TODO: try vaut data
 
   const balances = {};
   sdk.util.sumSingleBalance(balances, agoric.coinGeckoId, totalTVL);
@@ -227,8 +270,6 @@ module.exports = {
   timetravel: false,
   methodology: "Sum of IST TVL on Agoric",
   ist: {
-    // tvl: fetchISTData, // use fetchISTData for now
-    // tvl: fetchISTDataWithUSD, // uncomment to use usd calculation
     tvl: fetchTotalTVL, //debug: total tvl
   },
 };

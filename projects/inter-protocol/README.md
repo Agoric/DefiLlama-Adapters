@@ -29,20 +29,20 @@ for ```fetchVaultData```, we start by fetching the vault managers from /custom/v
 Taking into account reserve, vaults, and psm
 
 ```
-IST Data: { agoric: 1334769.86126 }
+IST Data: { 'inter-stable-token': 1334769.86126 }
 Reserve Data: 155816555
 PSM Data: 30010011
-Vault Data: 31960.240000000005
+Vault Data: 31960.239999999998
 --- ist ---
-BLD                       18.09 M
-Total: 18.09 M 
+IST                       185.86 M
+Total: 185.86 M 
 
 --- tvl ---
-BLD                       18.09 M
-Total: 18.09 M 
+IST                       185.86 M
+Total: 185.86 M 
 
 ------ TVL ------
-ist                       18.09 M
+ist                       185.86 M
 
-total                    18.09 M 
+total                    185.86 M 
 ```

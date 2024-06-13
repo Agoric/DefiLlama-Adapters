@@ -5,7 +5,7 @@ const axios = require("axios");
 const agoric = {
   chainId: "agoric-3",
   denom: "uist",
-  coinGeckoId: "agoric",
+  coinGeckoId: "inter-stable-token",
 };
 
 /*

@@ -5,7 +5,7 @@ Run with this command, from the root directory:
 node test.js projects/inter-protocol/index.js 
 ```
 
-## functions overview
+# Approach 1: functions overview (deprecated)
 - getCoinDecimals: returns the numbr of decimals for a givn denomination. IST uses 1e6 decimals.
 - fetchISTData: fetches the total supply of IST and returns it in a format compatble with defillama. uses the cosmos directory api to get the supply data and processes it.
 - fetchISTDataWithUSD: fetches the total suply of IST, converts it to usd value using coingecko api, and returns it in a format compatible with defillama. note: this function is not used by default.
@@ -15,7 +15,7 @@ node test.js projects/inter-protocol/index.js
 - fetchVaultData: fetches vault data from vstorage and calculates the total locked value in usd. collects unique collateral types, fetches their prices from coingecko, and calculates the total usd value of the locked collateral.
 - fetchTotalTVL: calculates total tvl (total value locked) including reserves, psm, vaults, and IST supply. sums up the values fetched by the other functions to get the total tvl.
 
-### logic
+## logic
 
 for ```fetchISTData```, we are pulling the total IST supply from the cosmos directory. the endpoint we’re hitting is https://rest.cosmos.directory/agoric/cosmos/bank/v1beta1/supply/by_denom?denom=uist. we process this to get the amount of IST in circulation. (May not need this as it might be redundant..?)
 
@@ -45,4 +45,40 @@ Total: 185.86 M
 ist                       185.86 M
 
 total                    185.86 M 
+```
+
+# Approach 2: Subquery approach 
+
+This approach simply makes graphql queries to our aubquery indexer
+
+## logic
+
+for ```fetchReserveData```, we fetch reserve metrics data from the subquery endpoint. we get the reserve allocations and calculate the total reserve value.
+
+for ```fetchPSMData```, we fetch PSM metrics data from the subquery endpoint. we get the minted pool balances for all asset types and calculate the total PSM value.
+
+for ```fetchVaultData```, we fetch vault manager metrics data from the subquery endpoint. we get the total collateral locked in the vaults and calculate its value.
+
+for ```fetchTotalCollateral```, we fetch the total collateral and oracle prices from the subquery endpoint. for each collateral brand, we get its total collateral value and usd price from the oracle prices. we also get the decimal places for each collateral brand from board aux data. we calculate the usd value by multiplying the collateral amount by its price and dividing by its decimal places. finally, we sum up the usd values for all collateral types (need to sanity check this)
+
+## example output
+
+```
+IST Data: { 'inter-stable-token': 1324886.823845 }
+Reserve Data: 88840.683426
+PSM Data: 5475.886243
+Vault Data: 1981257.5781
+Total Collat:  57157332.45712694
+--- ist ---
+IST                       56.99 M
+Total: 56.99 M 
+
+--- tvl ---
+IST                       56.99 M
+Total: 56.99 M 
+
+------ TVL ------
+ist                       56.99 M
+
+total                    56.99 M 
 ```

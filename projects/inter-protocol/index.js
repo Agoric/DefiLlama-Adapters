@@ -9,19 +9,47 @@ const agoric = {
 };
 
 /*
+@name delay
+@description throttle rpc calls
+@param ms - milliseconds to delay
+*/
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/*
 @name getCoinDecimals
 @description returns the number of decimals for the given denomination
 @param denom - the denomination to get decimals for
 */
-function getCoinDecimals(denom) {
-  return 1e6; // IST uses 1e6
+const getCoinDecimals = (denom) => 1e6; // IST uses 1e6
+
+/*
+@name fetchSubqueryData
+@description fetches data from the Agoric Subquery Indexer
+@param query - the GraphQL query to execute
+*/
+const fetchSubqueryData = async (query) => {
+  const url = 'https://api.subquery.network/sq/agoric-labs/agoric-mainnet-v2';
+  try {
+    const response = await axios.post(url, { query }, {
+      headers: { "Content-Type": "application/json" }
+    });
+
+    if (response.data.errors) {
+      throw new Error(response.data.errors.map(e => e.message).join(", "));
+    }
+
+    return response.data.data;
+  } catch (error) {
+    console.error('Error fetching data from Subquery:', error);
+    throw error;
+  }
 }
 
 /*
 @name fetchISTData
 @description fetches the total supply of IST and returns it in a format compatble with defillama
 */
-async function fetchISTData() {
+const fetchISTData = async () => {
   // from https://github.com/DefiLlama/peggedassets-server/pull/292
   const url = "https://rest.cosmos.directory/agoric/cosmos/bank/v1beta1/supply/by_denom?denom=uist";
   const response = await axios.get(url);
@@ -40,7 +68,7 @@ async function fetchISTData() {
 @description fetches the total supply of IST, converts it to USD value and returns it in a format compatible with defillama
 @note wanted to explore another calculation, although this is dependent on external cg call
 */
-async function fetchISTDataWithUSD() {
+const fetchISTDataWithUSD = async () => {
   // fetch total supply of ist
   const url = "https://rest.cosmos.directory/agoric/cosmos/bank/v1beta1/supply/by_denom?denom=uist";
   const response = await axios.get(url);
@@ -62,215 +90,183 @@ async function fetchISTDataWithUSD() {
   return balances;
 }
 
-
-/*
-@name fetchVstorageData
-@description fetches data from vstorage
-@param path - the vstorage path to query
-*/
-async function fetchVstorageData(path) {
-  const url = "http://localhost:26657/";
-  const payload = {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "abci_query",
-    params: {
-      path: path,
-    },
-  };
-
-  try {
-    const response = await axios.post(url, payload, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (response.data.result.response.value) {
-      const decodedValue = Buffer.from(response.data.result.response.value, 'base64').toString('utf8');
-      return JSON.parse(decodedValue);
-    } else {
-      throw new Error('No value found in response');
-    }
-  } catch (error) {
-    // console.error("Error fetching vstorage data:", error);
-    throw error;
-  }
-}
-
-
 /*
 @name fetchReserveData
-@description fetches reserve data from vstorage 
+@description fetches reserve data from subquery
 */
-async function fetchReserveData() {
-  const reserveData = await fetchVstorageData('/custom/vstorage/data/published.reserve.metrics'); // "+"" means is marshalled bigint
-  const parsedValue = JSON.parse(reserveData.value);
-  const parsedMetrics = JSON.parse(parsedValue.values[0]);
-  const cleanedMetricsBody = JSON.parse(parsedMetrics.body.substring(1));
-  // TODO: look at marshaler, fromCapData UPDATE: cannot add dep to repo 
-  const reserve = parseFloat(cleanedMetricsBody.allocations.Fee.value.replace('+', ''));
-  console.log("RESERVE");
-  console.log(reserve);
+const fetchReserveData = async () => {
+  const query = `
+  query {
+    reserveMetrics {
+      nodes {
+        shortfallBalance
+        allocations {
+          nodes {
+            id
+            denom
+            value
+          }
+        }
+      }
+    }
+  }`;
+  const data = await fetchSubqueryData(query);
+  const allocations = data.reserveMetrics.nodes[0].allocations.nodes;
+  let totalReserve = 0;
+  allocations.forEach(allocation => {
+    totalReserve += parseFloat(allocation.value);
+  });
+  const reserve = totalReserve / getCoinDecimals('uist');
   return reserve;
 }
 
 /*
 @name fetchPSMData
-@description fetches PSM data from vstorage for all asset types
+@description fetches PSM data from subquery for all asset types
 */
 const fetchPSMData = async () => {
-  const psmTypes = await fetchVstorageData('/custom/vstorage/children/published.psm.IST');
+  const query = `
+  query {
+    psmMetrics {
+      nodes {
+        mintedPoolBalance
+      }
+    }
+  }`;
+  const data = await fetchSubqueryData(query);
   let totalPsm = 0;
-
-  await Promise.all(psmTypes.children.map(async (assetType) => {
-    console.log("assetType", assetType);
-    const psmData = await fetchVstorageData(`/custom/vstorage/data/published.psm.IST.${assetType}.metrics`);
-    console.log("fetchPSMData iteration");
-    console.log(psmData);
-    const parsedPsmValue = JSON.parse(psmData.value);
-    console.log("parsedPsmValue");
-    console.log(parsedPsmValue);
-
-    parsedPsmValue.values.forEach((value) => {
-      const parsedMetrics = JSON.parse(value);
-      console.log("parsedMetrics");
-      console.log(parsedMetrics);
-      const cleanedMetricsBody = parsedMetrics.body.substring(1);
-      const cleanedParsedMetrics = JSON.parse(cleanedMetricsBody);
-      console.log("cleanedParsedMetrics");
-      console.log(cleanedParsedMetrics);
-      const psm = parseFloat(cleanedParsedMetrics.anchorPoolBalance.value.replace('+', ''));
-      console.log("PSM")
-      console.log(psm)
-      totalPsm += psm;
-    });
-  }));
-
-  return totalPsm;
-};
-
-
+  data.psmMetrics.nodes.forEach(psm => {
+    totalPsm += parseFloat(psm.mintedPoolBalance);
+  });
+  return totalPsm / getCoinDecimals('uist');
+}
 
 /*
 @name fetchVaultData
-@description fetches vault data from vstorage and calculates the total locked value in USD
+@description fetches vault data from subquery and calculates the total locked value in IST
 */
-async function fetchVaultData() {
-  const managerData = await fetchVstorageData('/custom/vstorage/children/published.vaultFactory.managers');
-  let totalLockedUSD = 0;
-  const collateralSet = new Set(); // no dups
-
-  // collect unique collateral types...
-  await Promise.all(managerData.children.map(async (managerId) => {
-    const vaultDataList = await fetchVstorageData(`/custom/vstorage/children/published.vaultFactory.managers.${managerId}.vaults`);
-    await Promise.all(vaultDataList.children.map(async (vaultId) => {
-      try {
-        const vaultData = await fetchVstorageData(`/custom/vstorage/data/published.vaultFactory.managers.${managerId}.vaults.${vaultId}`);
-        const parsedVaultData = JSON.parse(vaultData.value);
-        parsedVaultData.values.forEach((value) => {
-          const vaultMetrics = JSON.parse(value);
-          const cleanedMetricsBody = vaultMetrics.body.substring(1);
-          const cleanedParsedMetrics = JSON.parse(cleanedMetricsBody);
-          const lockedBrand = cleanedParsedMetrics.locked.brand.split(" ")[1].toLowerCase();
-          collateralSet.add(lockedBrand);
-        });
-      } catch (error) {
-        console.error("Error fetching vault data:", error);
+const fetchVaultData = async () => {
+  const query = `
+  query {
+    vaultManagerMetrics {
+      nodes {
+        totalCollateral
       }
-    }));
-  }));
-
-  // fetch prices for unique collateral types...
-  const collateralPrices = {};
-  await Promise.all([...collateralSet].map(async (collateral) => {
-    console.log("coll: ", collateral);
-    const collateralToFetch = (collateral === "atom") ? "cosmos" : collateral;
-    const priceUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${collateralToFetch}&vs_currencies=usd`;
-    console.log("priceUrl:", priceUrl);
-    try {
-      const priceResponse = await axios.get(priceUrl);
-      if (priceResponse.data[collateralToFetch]) {
-        console.log("Got Price: ", priceResponse);
-        collateralPrices[collateral] = priceResponse.data[collateralToFetch].usd;
-      } else {
-        console.error(`Price data not found for: ${collateral}`);
-      }
-    } catch (error) {
-      console.error(`Error fetching price for ${collateral}:`, error);
     }
-  }));
-
-  // calculate total locked value in USD...
-  await Promise.all(managerData.children.map(async (managerId) => {
-    const vaultDataList = await fetchVstorageData(`/custom/vstorage/children/published.vaultFactory.managers.${managerId}.vaults`);
-    console.log("vaultDataList");
-    console.log(vaultDataList);
-    await Promise.all(vaultDataList.children.map(async (vaultId) => {
-      try {
-        const vaultData = await fetchVstorageData(`/custom/vstorage/data/published.vaultFactory.managers.${managerId}.vaults.${vaultId}`);
-        const parsedVaultData = JSON.parse(vaultData.value);
-        parsedVaultData.values.forEach((value) => {
-          const vaultMetrics = JSON.parse(value);
-          const cleanedMetricsBody = vaultMetrics.body.substring(1);
-          const cleanedParsedMetrics = JSON.parse(cleanedMetricsBody);
-          const locked = parseFloat(cleanedParsedMetrics.locked.value.replace('+', ''));
-          const lockedBrand = cleanedParsedMetrics.locked.brand.split(" ")[1].toLowerCase();
-          console.log("lockedBrand: ", lockedBrand);
-          console.log(collateralPrices);
-          const price = collateralPrices[lockedBrand];
-          console.log("coll price: ", price);
-          if (price) {
-            const lockedUSD = locked * price / getCoinDecimals(lockedBrand);
-            totalLockedUSD += lockedUSD;
-          } else {
-            console.error(`Price not available for collateral: ${lockedBrand}`);
-          }
-        });
-      } catch (error) {
-        console.error("Error fetching vault data:", error);
-      }
-    }));
-  }));
-
-  return totalLockedUSD;
+  }`;
+  const data = await fetchSubqueryData(query);
+  let totalCollateral = 0;
+  data.vaultManagerMetrics.nodes.forEach(vault => {
+    totalCollateral += parseFloat(vault.totalCollateral);
+  });
+  return totalCollateral / getCoinDecimals('uist');
 }
 
+/*
+@name fetchTotalCollateral
+@description fetches total collateral and calculates its USD value
+*/
+const fetchTotalCollateral = async () => {
+  const query = `
+  query {
+    vaultManagerMetrics {
+      nodes {
+        totalCollateral
+        liquidatingCollateralBrand
+      }
+    }
+    oraclePrices {
+      nodes {
+        priceFeedName
+        typeOutAmount
+        typeInAmount
+      }
+    }
+    boardAuxes {
+      nodes {
+        allegedName
+        decimalPlaces
+      }
+    }
+  }`;
+
+  const data = await fetchSubqueryData(query);
+  console.log(data);
+  let totalCollateral = 0;
+  const collateralPrices = {};
+  const collateralDecimals = {};
+  const collateralSet = new Set();
+
+  data.vaultManagerMetrics.nodes.forEach(vault => {
+    console.log("vault");
+    console.log(vault);
+    totalCollateral += parseFloat(vault.totalCollateral);
+    collateralSet.add(vault.liquidatingCollateralBrand);
+  });
+
+  data.oraclePrices.nodes.forEach(price => {
+    console.log("price");
+    console.log(price);
+    collateralPrices[price.priceFeedName] = parseFloat(price.typeOutAmount) / parseFloat(price.typeInAmount);
+  });
+
+  data.boardAuxes.nodes.forEach(aux => {
+    console.log("aux")
+    console.log(aux)
+    collateralDecimals[aux.allegedName.toLowerCase()] = Math.pow(10, aux.decimalPlaces);
+  });
+
+  let totalCollateralUSD = 0;
+  collateralSet.forEach(collateral => {
+    const collatKey = `${collateral}-USD`;
+    const price = collateralPrices[collatKey];
+    const decimals = collateralDecimals[collateral.toLowerCase()] || 1;
+    console.log("decimals: ", decimals)
+    if (price) {
+      console.log(`[${collatKey}]collat price: `, price);
+      console.log(`[${collatKey}]collat amount: `, totalCollateral / decimals);
+      console.log(`[${collatKey}]collat price USD: `, (totalCollateral / decimals) * price);
+      totalCollateralUSD += (totalCollateral / decimals) * price;
+    } else {
+      console.error(`Price not found for collateral: ${collateral}`);
+    }
+  });
+
+  return totalCollateralUSD / getCoinDecimals('uist');
+};
 
 /*
 @name fetchTotalTVL
 @description calculates total TVL including reserves, PSM, vaultsl, (and IST supply?)
 */
-async function fetchTotalTVL() {
+const fetchTotalTVL = async () => { 
   const istData = await fetchISTData();
   const reserveData = await fetchReserveData();
   const psmData = await fetchPSMData();
   const vaultData = await fetchVaultData();
-
+  const totalCollateral = await fetchTotalCollateral();
 
   console.log("IST Data:", istData); // do we need the supply? would it be redundant?
   console.log("Reserve Data:", reserveData);
   console.log("PSM Data:", psmData);
   console.log("Vault Data:", vaultData);
-
+  console.log("Total Collat: ", totalCollateral)
 
   const totalIST = parseFloat(Object.values(istData)[0]);
-  // const totalTVL = totalIST + reserveData + psmData;
-  // const totalTVL = reserveData + psmData; // remove total supply from calc?
-  // const totalTVL = totalIST + reserveData + psmData + vaultData; //TODO: try vaut data
-  const totalTVL =  reserveData + psmData + vaultData; 
 
+  // TODO: decide on which one....
+  // const totalTVL = totalIST + reserveData + psmData + vaultData;
+  const totalTVL = totalCollateral
   const balances = {};
   sdk.util.sumSingleBalance(balances, agoric.coinGeckoId, totalTVL);
 
   return balances;
 }
 
-
 module.exports = {
   timetravel: false,
-  methodology: "Sum of IST TVL on Agoric",
+  methodology: "sum of ist tvl on agoric",
   ist: {
-    tvl: fetchTotalTVL, //debug: total tvl
+    tvl: fetchTotalTVL,
   },
 };

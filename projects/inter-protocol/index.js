@@ -192,16 +192,19 @@ const fetchTotalCollateral = async () => {
 
   const data = await fetchSubqueryData(query);
   console.log(data);
-  let totalCollateral = 0;
   const collateralPrices = {};
   const collateralDecimals = {};
-  const collateralSet = new Set();
+  const collateralMap = {};
 
   data.vaultManagerMetrics.nodes.forEach(vault => {
     console.log("vault");
     console.log(vault);
-    totalCollateral += parseFloat(vault.totalCollateral);
-    collateralSet.add(vault.liquidatingCollateralBrand);
+    const collateralType = vault.liquidatingCollateralBrand;
+    const collateralValue = parseFloat(vault.totalCollateral);
+    if (!collateralMap[collateralType]) {
+      collateralMap[collateralType] = 0;
+    }
+    collateralMap[collateralType] += collateralValue;
   });
 
   data.oraclePrices.nodes.forEach(price => {
@@ -217,16 +220,17 @@ const fetchTotalCollateral = async () => {
   });
 
   let totalCollateralUSD = 0;
-  collateralSet.forEach(collateral => {
+  Object.keys(collateralMap).forEach(collateral => {
     const collatKey = `${collateral}-USD`;
     const price = collateralPrices[collatKey];
     const decimals = collateralDecimals[collateral.toLowerCase()] || 1;
-    console.log("decimals: ", decimals)
+    const collateralAmount = collateralMap[collateral] / decimals;
+    console.log("decimals: ", decimals);
     if (price) {
       console.log(`[${collatKey}]collat price: `, price);
-      console.log(`[${collatKey}]collat amount: `, totalCollateral / decimals);
-      console.log(`[${collatKey}]collat price USD: `, (totalCollateral / decimals) * price);
-      totalCollateralUSD += (totalCollateral / decimals) * price;
+      console.log(`[${collatKey}]collat amount: `, collateralAmount);
+      console.log(`[${collatKey}]collat price USD: `, collateralAmount * price);
+      totalCollateralUSD += collateralAmount * price;
     } else {
       console.error(`Price not found for collateral: ${collateral}`);
     }
